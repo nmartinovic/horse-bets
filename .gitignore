@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# Playwright browsers
+playwright/.cache/
+
+# Logs, data
+*.sqlite*
+data/
+*.log
+
+# VS Code
+.vscode/
+
+# macOS, Linux
+.DS_Store
