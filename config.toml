@@ -1,0 +1,4 @@
+[turf]
+card_url      = "https://www.unibet.fr/turf"
+list_selector = "li.race"        # every tile
+time_selector = ".countdown"     # same as before
