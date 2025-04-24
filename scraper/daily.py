@@ -29,11 +29,17 @@ TZ: ZoneInfo = ZoneInfo("Europe/Paris")
 # --------------------------------------------------------------------------- #
 
 
-async def collect_today(sched: AsyncIOScheduler) -> None:
+async def collect_today(sched=None) -> None:
     """
-    Called by APScheduler at 09:00.  Scrapes today's race list and loads the
-    scheduler with one-off jobs that will fire 3 min before each race.
+    Scrape today's race card and schedule T-3-min jobs.
+
+    If *sched* is None (normal daily run), the function falls back to
+    the project-wide AsyncIOScheduler imported lazily to avoid
+    circular-imports.
     """
+    if sched is None:
+        from scraper.scheduler import SCHED as sched  # late import to avoid pickle issue
+
     # --- 1. Pull list of races ------------------------------------------------
     async with get_page() as page:
         await page.goto(CFG["turf"]["card_url"], wait_until="networkidle")
@@ -84,3 +90,22 @@ async def collect_today(sched: AsyncIOScheduler) -> None:
             id=race["url"],          # unique → safe to replace_existing
             replace_existing=True,
         )
+
+
+# --------------------------------------------------------------------------- #
+# Manual CLI entry point
+# --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Manual CLI entry point  (poetry run python -m scraper.daily)
+# --------------------------------------------------------------------------- #
+if __name__ == "__main__":
+    import asyncio
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    async def _run_once():
+        tmp = AsyncIOScheduler(timezone=TZ)
+        tmp.start()
+        await collect_today(tmp)
+        tmp.shutdown(wait=False)
+
+    asyncio.run(_run_once())

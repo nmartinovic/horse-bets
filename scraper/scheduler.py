@@ -19,11 +19,10 @@ SCHED = AsyncIOScheduler(
 
 # Daily 09:00 card‑scrape
 SCHED.add_job(
-    collect_today,
+    collect_today,          # no args
     "cron",
     hour=9,
     minute=0,
-    args=[SCHED],
     id="collect_today",
     replace_existing=True,
 )
