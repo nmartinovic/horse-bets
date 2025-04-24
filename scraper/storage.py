@@ -24,7 +24,7 @@ Base = declarative_base()
 class Race(Base):
     __tablename__ = "races"
     id = Column(Integer, primary_key=True)
-    race_id = Column(String, unique=True, nullable=False)   # <— now named race_id
+    race_id = Column(String, unique=True, nullable=False)   # renamed
     post_time = Column(DateTime(timezone=True), nullable=False)
 
 
@@ -45,23 +45,29 @@ def _get_session() -> Session:
     return SessionLocal()
 
 
-def upsert_race(url: str, post_time: datetime) -> int:
+def upsert_race(race_id: str, post_time: datetime) -> int:
+    """
+    Insert or update a race row keyed by *race_id*.  Returns primary-key id.
+    """
     with _get_session() as db:
-        race = db.query(Race).filter_by(url=url).one_or_none()
+        race = db.query(Race).filter_by(race_id=race_id).one_or_none()
         if race:
             race.post_time = post_time
         else:
-            race = Race(url=url, post_time=post_time)
+            race = Race(race_id=race_id, post_time=post_time)
             db.add(race)
         db.commit()
         return race.id
 
 
-def store_snapshot(url: str, payload: dict[str, Any]) -> None:
+def store_snapshot(race_id: str, payload: dict[str, Any]) -> None:
+    """
+    Insert a snapshot JSON blob linked to *race_id*.
+    """
     with _get_session() as db:
-        race = db.query(Race).filter_by(url=url).one_or_none()
+        race = db.query(Race).filter_by(race_id=race_id).one_or_none()
         if race is None:
-            raise RuntimeError(f"Race {url} not in DB – did collect_today() run?")
+            raise RuntimeError(f"Race {race_id} not found – did collect_today() run?")
         snap = Snapshot(race_id=race.id, payload=payload)
         db.add(snap)
         db.commit()
