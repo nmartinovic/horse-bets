@@ -1,9 +1,16 @@
 # scraper/daily.py
 """
-collect_today(sched) –
-• Scrape today’s Unibet-Turf race card at 09:00 Europe/Paris.
-• Insert/Update each race row in SQLite.
-• Schedule a one-off scrape_race() job 3 minutes before post-time.
+collect_today(sched=None)
+─────────────────────────
+• Scrapes today's Unibet Turf card (list of race tiles)
+• Upserts each race_id + post_time into SQLite
+• Queues a one-off scrape_race() job 3 minutes before post-time
+
+If *sched* is None (normal daily run), the function falls back to the
+project-wide AsyncIOScheduler imported lazily to avoid circular imports.
+
+Run once manually:
+    poetry run python -m scraper.daily
 """
 from __future__ import annotations
 
@@ -20,92 +27,68 @@ from scraper import race_job
 # --------------------------------------------------------------------------- #
 # Config & constants
 # --------------------------------------------------------------------------- #
-with open("config.toml", "rb") as f:
-    CFG = tomli.load(f)
-TZ: ZoneInfo = ZoneInfo("Europe/Paris")
+TZ = ZoneInfo("Europe/Paris")
+CFG = tomli.load(open("config.toml", "rb"))
+
+LIST_SEL = f'{CFG["turf"]["list_selector"]}[data-betting-race-id]'   # "li.race[data-betting-race-id]"
+TIME_SEL = CFG["turf"]["time_selector"]                              # ".countdown"
 
 # --------------------------------------------------------------------------- #
 # Main task
 # --------------------------------------------------------------------------- #
+async def collect_today(sched: AsyncIOScheduler | None = None) -> None:
+    if sched is None:                      # called by the global scheduler
+        from scraper.scheduler import SCHED as sched  # late import
 
-
-async def collect_today(sched=None) -> None:
-    """
-    Scrape today's race card and schedule T-3-min jobs.
-
-    If *sched* is None (normal daily run), the function falls back to
-    the project-wide AsyncIOScheduler imported lazily to avoid
-    circular-imports.
-    """
-    if sched is None:
-        from scraper.scheduler import SCHED as sched  # late import to avoid pickle issue
-
-    # --- 1. Pull list of races ------------------------------------------------
+    # 1. Scrape the day-card ---------------------------------------------------
     async with get_page() as page:
         await page.goto(CFG["turf"]["card_url"], wait_until="networkidle")
+        await page.wait_for_selector(LIST_SEL, timeout=10_000)
 
-        # Run JS in page context: create {url, time} objects from <li class="race">
         JS = """
-        (elements) => elements.map(el => {
-            const id = el.dataset.bettingRaceId;
-            const url = `https://www.unibet.fr/turf/#/racing/${id}`;
-            const timeText = el.querySelector('.countdown')?.innerText.trim() || null;
-            return { url, time: timeText };
+        (els, timeSel) => els.map(el => {
+            const id   = el.dataset.bettingRaceId;
+            const time = el.querySelector(timeSel)?.innerText.trim() || null;
+            return { id, time };
         })
         """
-        races = await page.eval_on_selector_all(CFG["turf"]["list_selector"], JS)
+        races = await page.eval_on_selector_all(LIST_SEL, JS, TIME_SEL)
 
-    # --- 2. Store and schedule ------------------------------------------------
+    # 2. Store + schedule ------------------------------------------------------
     today: date = datetime.now(TZ).date()
 
-    for race in races:
-        if not race["time"]:
-            # Skip tiles missing a visible time
-            continue
+    for r in races:
+        if not r["time"]:
+            continue  # skip malformed
 
-        try:
-            hh, mm = map(int, race["time"].replace("h", ":").split(":"))
-        except ValueError:
-            # Unexpected time format (defensive)
-            continue
-
+        hh, mm = map(int, r["time"].replace("h", ":").split(":"))
         post_dt = datetime(
-            year=today.year,
-            month=today.month,
-            day=today.day,
-            hour=hh,
-            minute=mm,
-            tzinfo=TZ,
+            year=today.year, month=today.month, day=today.day,
+            hour=hh, minute=mm, tzinfo=TZ
         )
 
-        # DB upsert
-        upsert_race(race["url"], post_dt)
+        race_id = r["id"]
+        upsert_race(race_id, post_dt)
 
-        # Schedule T-3 min scrape
         sched.add_job(
             race_job.scrape_race,
             trigger="date",
             run_date=post_dt - timedelta(minutes=3),
-            args=[race["url"]],
-            id=race["url"],          # unique → safe to replace_existing
+            args=[race_id],
+            id=race_id,
             replace_existing=True,
         )
-
 
 # --------------------------------------------------------------------------- #
 # Manual CLI entry point
 # --------------------------------------------------------------------------- #
-# --------------------------------------------------------------------------- #
-# Manual CLI entry point  (poetry run python -m scraper.daily)
-# --------------------------------------------------------------------------- #
 if __name__ == "__main__":
     import asyncio
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
     async def _run_once():
-        tmp = AsyncIOScheduler(timezone=TZ)
-        tmp.start()
-        await collect_today(tmp)
-        tmp.shutdown(wait=False)
+        tmp_sched = AsyncIOScheduler(timezone=TZ)
+        tmp_sched.start()
+        await collect_today(tmp_sched)
+        tmp_sched.shutdown(wait=False)
 
     asyncio.run(_run_once())
