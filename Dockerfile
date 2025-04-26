@@ -19,6 +19,7 @@ RUN pip install "poetry==$POETRY_VERSION"
 
 # 4. Copy project & install deps
 WORKDIR /app
+ARG CACHE_BREAK=20250426
 COPY pyproject.toml poetry.lock* ./
 RUN poetry install --no-interaction --no-ansi --without dev
 
