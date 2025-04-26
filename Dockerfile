@@ -20,7 +20,8 @@ RUN pip install "poetry==$POETRY_VERSION"
 # 4. Copy project & install deps
 WORKDIR /app
 COPY pyproject.toml poetry.lock* ./
-RUN poetry install --only main --no-interaction --no-ansi
+RUN poetry install --no-interaction --no-ansi --without dev
+
 
 # 5. Copy the code (after deps for better caching)
 COPY . .
