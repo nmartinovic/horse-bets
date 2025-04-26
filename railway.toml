@@ -1,0 +1,12 @@
+# railway.toml – lets Railway know how to start the service
+[build]
+dockerfile = "./Dockerfile"
+
+[deploy]
+startCommand = "python main.py"
+restartPolicyType = "on_failure"
+
+[volumes]
+# mount the data/ folder to persist SQLite + APScheduler job store
+[volumes.data]
+mountPath = "/app/data"
