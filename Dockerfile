@@ -19,10 +19,18 @@ RUN pip install "poetry==$POETRY_VERSION"
 
 # 4. Copy project & install deps
 WORKDIR /app
-ARG CACHE_BREAK=20250426
+ARG CACHE_BREAK=20250426D
 COPY pyproject.toml poetry.lock* ./
 RUN poetry install --no-interaction --no-ansi --without dev
-
+# --- DEBUG: prove that the venv contains our runtime packages -------------
+RUN poetry run python - <<'PY'
+import importlib.util as u, sys, json, textwrap
+missing = [pkg for pkg in ("apscheduler","sqlalchemy","playwright","pandas","httpx")
+            if u.find_spec(pkg) is None]
+print("DEBUG venv python:", sys.executable)
+print("DEBUG missing   :", missing)
+PY
+# --------------------------------------------------------------------------
 
 # 5. Copy the code (after deps for better caching)
 COPY . .
