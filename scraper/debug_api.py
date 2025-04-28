@@ -1,22 +1,24 @@
-# scraper/debug_api.py
+# scraper/debug_api.py  (only the top section changes)
+
 import json, pathlib, sqlite3, asyncio, datetime
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-from scraper.daily import collect_today             # schedules jobs
-from scraper.race_job import scrape_race            # single race scrape
+from scraper.daily import collect_today
+from scraper.race_job import scrape_race
 from scraper.storage import ENGINE, Base
 import logging
 
 DB_DIR  = pathlib.Path("/app/data")
-DB_FILE = DB_DIR / "horse_bets.sqlite"
-DB_DIR.mkdir(parents=True, exist_ok=True)
-if not DB_FILE.exists():                    # first-run bootstrap
+DB_FILE = DB_DIR / "horse_bets.sqlite"          # <- point at the FILE
+
+DB_DIR.mkdir(parents=True, exist_ok=True)       # ensure directory exists
+if not DB_FILE.exists():                       # bootstrap empty DB
     Base.metadata.create_all(ENGINE)
 
 app = FastAPI(title="Horse-Bets Debug API")
 
-# ------------------------------------------------------------------ helpers
+# ------------- helper -----------------------------------------------------
 def latest_snapshot():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE)            # use the file path
     row = conn.execute(
         "SELECT race_pk, payload FROM snapshots ORDER BY id DESC LIMIT 1"
     ).fetchone()
@@ -27,6 +29,7 @@ def latest_snapshot():
     data = json.loads(payload)
     data["race_pk"] = pk
     return data
+
 
 # ------------------------------------------------------------------ routes
 @app.get("/latest")
