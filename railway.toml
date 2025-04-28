@@ -2,8 +2,7 @@
 dockerfile = "./Dockerfile"
 
 [deploy]
-startCommand = "poetry run python main.py"   # use the venv!
-restartPolicyType = "on_failure"
+
 
 # Persist SQLite + APScheduler jobstore
 [volumes]
