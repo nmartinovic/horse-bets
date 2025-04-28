@@ -1,52 +1,55 @@
 # scraper/debug_api.py
+import json, pathlib, sqlite3, asyncio, datetime
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-import sqlite3, pathlib, json, datetime, asyncio, os
+from scraper.daily import collect_today             # schedules jobs
+from scraper.race_job import scrape_race            # single race scrape
+from scraper.storage import ENGINE, Base
+import logging
 
-from scraper.race_job import scrape_race          # ← existing coroutine
-from scraper.storage import store_snapshot        # if you want to persist
 DB_DIR  = pathlib.Path("/app/data")
 DB_FILE = DB_DIR / "horse_bets.sqlite"
 DB_DIR.mkdir(parents=True, exist_ok=True)
+if not DB_FILE.exists():                    # first-run bootstrap
+    Base.metadata.create_all(ENGINE)
 
-app = FastAPI()
+app = FastAPI(title="Horse-Bets Debug API")
 
-# ---------- helpers -------------------------------------------------------- #
-def _latest_row():
+# ------------------------------------------------------------------ helpers
+def latest_snapshot():
     conn = sqlite3.connect(DB_FILE)
-    row  = conn.execute(
+    row = conn.execute(
         "SELECT race_pk, payload FROM snapshots ORDER BY id DESC LIMIT 1"
     ).fetchone()
     conn.close()
-    return row
-
-# ---------- routes --------------------------------------------------------- #
-@app.get("/latest")
-def latest_snapshot():
-    row = _latest_row()
     if not row:
-        return {"error": "no snapshots yet",
-                "server_time": datetime.datetime.utcnow().isoformat()}
+        return None
     pk, payload = row
     data = json.loads(payload)
     data["race_pk"] = pk
     return data
 
+# ------------------------------------------------------------------ routes
+@app.get("/latest")
+def latest():
+    data = latest_snapshot()
+    return data or {"error": "no snapshots yet",
+                    "server_time": datetime.datetime.utcnow().isoformat()}
+
+@app.post("/collect")
+async def run_collect(bg: BackgroundTasks):
+    async def _task():
+        await collect_today(None)           # tmp_sched=None → just harvest IDs
+    bg.add_task(_task)
+    return {"status": "collect_today queued"}
 
 @app.post("/scrape/{race_id}")
-async def scrape_now(
-    race_id: str,
-    background: BackgroundTasks,
-):
-    """
-    Trigger scrape_race(race_id) immediately in the background and
-    return 202 Accepted with a tiny status blob.
-    """
-    # Kick off the coroutine without blocking the response
-    background.add_task(_run_and_store, race_id)
-    return {"status": "accepted", "race_id": race_id, "ts": datetime.datetime.utcnow().isoformat()}
+async def run_scrape(race_id: str, bg: BackgroundTasks):
+    async def _task():
+        await scrape_race(race_id)
+    bg.add_task(_task)
+    return {"status": f"scrape_race({race_id}) queued"}
 
-
-async def _run_and_store(race_id: str):
-    """Helper that calls scrape_race and stores the snapshot."""
-    payload = await scrape_race(race_id)          # returns dict from bookmarklet
-    store_snapshot(race_id, payload)              # persist so /latest can see it
+# ------------------------------------------------------------------ lifespan
+@app.on_event("startup")
+async def announce():
+    logging.info("Debug API ready – /latest, /collect, /scrape/{id}")
