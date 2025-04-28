@@ -39,4 +39,5 @@ COPY . .
 RUN poetry run playwright install --with-deps chromium
 
 # 7. Expose nothing (not a web app) and run
-CMD ["poetry", "run", "python", "main.py"]
+CMD ["poetry", "run", "uvicorn", "scraper.debug_api:app",
+     "--host", "0.0.0.0", "--port", "8000"]
