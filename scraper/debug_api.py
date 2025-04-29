@@ -75,6 +75,17 @@ async def run_scrape(race_id: str, bg: BackgroundTasks):
     return {"status": f"scrape_race({race_id}) queued"}
 
 # ------------------------------------------------------------------ lifespan
-@app.on_event("startup")
-async def announce():
-    logging.info("Debug API ready – /latest, /collect, /scrape/{id}")
+async def lifespan(app: FastAPI):
+    """
+    Start the head-less scraper (main.py) in the background while
+    FastAPI serves HTTP.
+    """
+    # Local import so IDEs don't look for scraper.main
+    from main import main_async           # <-- project-root main.py
+    import asyncio, logging
+
+    asyncio.create_task(main_async())
+    logging.info("Background scraper started alongside FastAPI")
+    yield                                  # hand control back to FastAPI
+
+app = FastAPI(title="Horse-Bets Debug API", lifespan=lifespan)
