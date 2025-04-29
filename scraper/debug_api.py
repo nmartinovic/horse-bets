@@ -37,12 +37,9 @@ from datetime import date
 
 @app.get("/races")
 def list_races(limit: int | None = 50):
-    """
-    Return today's races (UTC date) sorted by post_time.
-    ?limit=N  -- optional number of rows (default 50, None = all).
-    """
+    """Return today's races from the races table."""
     sql = (
-        "SELECT id, race_id, time(post_time) AS local_time, url "
+        "SELECT id, race_id, time(post_time) AS local_time "
         "FROM races "
         "WHERE date(post_time) = ? "
         "ORDER BY post_time "
@@ -51,9 +48,10 @@ def list_races(limit: int | None = 50):
         sql += f"LIMIT {limit}"
     rows = sqlite3.connect(DB_FILE).execute(sql, (date.today().isoformat(),)).fetchall()
     return [
-        {"pk": r[0], "race_id": r[1], "post_time": r[2], "url": r[3]}
+        {"pk": r[0], "race_id": r[1], "post_time": r[2]}
         for r in rows
     ]
+
 
 
 @app.get("/latest")
