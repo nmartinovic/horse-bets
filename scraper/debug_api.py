@@ -18,16 +18,17 @@ app = FastAPI(title="Horse-Bets Debug API")
 
 # ------------- helper -----------------------------------------------------
 def latest_snapshot():
-    conn = sqlite3.connect(DB_FILE)            # use the file path
+    conn = sqlite3.connect(DB_FILE)
     row = conn.execute(
-        "SELECT race_pk, payload FROM snapshots ORDER BY id DESC LIMIT 1"
+        "SELECT id, race_id, payload "
+        "FROM snapshots ORDER BY id DESC LIMIT 1"
     ).fetchone()
     conn.close()
     if not row:
         return None
-    pk, payload = row
+    snap_id, race_id, payload = row
     data = json.loads(payload)
-    data["race_pk"] = pk
+    data.update({"snapshot_id": snap_id, "race_id": race_id})
     return data
 
 
