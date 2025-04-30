@@ -70,3 +70,15 @@ async def run_scrape(race_id: str, bg: BackgroundTasks):
         await scrape_race(race_id)
     bg.add_task(_task)
     return {"status": f"scrape_race({race_id}) queued"}
+
+@app.get("/snapshot/{race_id}")
+def get_snapshot(race_id: str):
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        "SELECT payload FROM snapshots WHERE race_id=? ORDER BY id DESC LIMIT 1",
+        (race_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    return json.loads(row[0])
