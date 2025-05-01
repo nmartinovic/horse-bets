@@ -8,15 +8,11 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 )
 
-async def main_async() -> None:
-    """Start the APScheduler and keep the loop alive forever."""
+async def main_async():
+    """Boot the global scheduler and keep the process alive."""
     SCHED.start()
-    logging.info("Scheduler started with %d jobs", len(SCHED.get_jobs()))
-
-    try:
-        await asyncio.Event().wait()   # sleep forever (until Ctrl-C)
-    finally:
-        await SCHED.shutdown()
+    # block forever; container will SIGTERM on deploy/scale-down
+    await asyncio.Event().wait()          # ← replaces old try/finally block
 
 if __name__ == "__main__":
     asyncio.run(main_async())
