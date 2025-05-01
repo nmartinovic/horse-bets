@@ -2,22 +2,20 @@
 """
 collect_today(sched=None)
 ─────────────────────────
-• Scrapes today's Unibet Turf card (list of race tiles)
+• Scrapes today's Unibet Turf card (all race tiles, scrolling as needed)
 • Upserts each race_id + post_time into SQLite
 • Queues a one-off scrape_race() job 3 minutes before post-time
-
-If *sched* is None (normal daily run), the function falls back to the
-project-wide AsyncIOScheduler imported lazily to avoid circular imports.
 
 Run once manually:
     poetry run python -m scraper.daily
 """
 from __future__ import annotations
 
-import tomli
+import asyncio
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import tomli
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from scraper.browser import get_page
@@ -30,21 +28,41 @@ from scraper import race_job
 TZ = ZoneInfo("Europe/Paris")
 CFG = tomli.load(open("config.toml", "rb"))
 
-LIST_SEL = f'{CFG["turf"]["list_selector"]}[data-betting-race-id]'   # "li.race[data-betting-race-id]"
-TIME_SEL = CFG["turf"]["time_selector"]                              # ".countdown"
+LIST_SEL: str = "[data-betting-race-id]"                 # robust attribute
+TIME_SEL: str = CFG["turf"]["time_selector"]             # ".countdown"
+CARD_URL: str = CFG["turf"]["card_url"]                  # https://www.unibet.fr/turf
 
 # --------------------------------------------------------------------------- #
 # Main task
 # --------------------------------------------------------------------------- #
 async def collect_today(sched: AsyncIOScheduler | None = None) -> None:
-    if sched is None:                      # called by the global scheduler
+    if sched is None:                       # called by the global scheduler
         from scraper.scheduler import SCHED as sched  # late import
 
-    # 1. Scrape the day-card ---------------------------------------------------
+    # ── 1. Scrape the day card ───────────────────────────────────────────────
     async with get_page() as page:
-        await page.goto(CFG["turf"]["card_url"], wait_until="networkidle")
-        await page.wait_for_selector(LIST_SEL, timeout=10_000)
+        await page.goto(CARD_URL, wait_until="networkidle")
 
+        # cookie consent (FR locale)
+        try:
+            await page.locator("button:has-text('Accepter')").click(timeout=3_000)
+        except Exception:  # noqa: BLE001
+            pass  # banner not present
+
+        # wait for at least one tile
+        await page.wait_for_selector(LIST_SEL, timeout=30_000)
+
+        # scroll until no new tiles appear
+        last_count = 0
+        while True:
+            tiles = await page.query_selector_all(LIST_SEL)
+            if len(tiles) == last_count:
+                break
+            last_count = len(tiles)
+            await tiles[-1].scroll_into_view_if_needed()
+            await page.wait_for_timeout(800)      # give JS time to load
+
+        # extract ids + HHhMM strings from *all* tiles
         JS = """
         (els, timeSel) => els.map(el => {
             const id   = el.dataset.bettingRaceId;
@@ -52,9 +70,9 @@ async def collect_today(sched: AsyncIOScheduler | None = None) -> None:
             return { id, time };
         })
         """
-        races = await page.eval_on_selector_all(LIST_SEL, JS, TIME_SEL)
+        races = await page.evaluate(JS, tiles, TIME_SEL)  # type: ignore[arg-type]
 
-    # 2. Store + schedule ------------------------------------------------------
+    # ── 2. Store + schedule ─────────────────────────────────────────────────
     today: date = datetime.now(TZ).date()
 
     for r in races:
@@ -83,8 +101,6 @@ async def collect_today(sched: AsyncIOScheduler | None = None) -> None:
 # Manual CLI entry point
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
-    import asyncio
-
     async def _run_once():
         tmp_sched = AsyncIOScheduler(timezone=TZ)
         tmp_sched.start()
