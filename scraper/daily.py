@@ -64,13 +64,14 @@ async def collect_today(sched: AsyncIOScheduler | None = None) -> None:
 
         # extract ids + HHhMM strings from *all* tiles
         JS = """
-        (els, timeSel) => els.map(el => {
+        (elements, timeSel) => elements.map(el => {
             const id   = el.dataset.bettingRaceId;
             const time = el.querySelector(timeSel)?.innerText.trim() || null;
             return { id, time };
         })
         """
-        races = await page.evaluate(JS, tiles, TIME_SEL)  # type: ignore[arg-type]
+        races = await page.eval_on_selector_all(LIST_SEL, JS, TIME_SEL)
+        logger.info("Harvested %d race tiles", len(races))
 
     # ── 2. Store + schedule ─────────────────────────────────────────────────
     today: date = datetime.now(TZ).date()
