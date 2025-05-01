@@ -1,33 +1,64 @@
-import json, pathlib, sqlite3, datetime, asyncio, logging
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+"""
+scraper/debug_api.py  –  lightweight FastAPI debug/ops server
+Runs alongside the head-less scraper so you can inspect the DB and
+trigger harvests on demand.
+"""
+from __future__ import annotations
+
+import asyncio
+import datetime as dt
+import json
+import logging
+import pathlib
+import sqlite3
+from typing import Any
+
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+
 from scraper.daily import collect_today
 from scraper.race_job import scrape_race
-from scraper.storage import ENGINE, Base
+from scraper.storage import ENGINE, Base  # to create tables on first run
 
-# ─── database bootstrap ─────────────────────────────────────────────
-DB_DIR  = pathlib.Path("/app/data")
-DB_FILE = DB_DIR / "horse_bets.sqlite"
+# --------------------------------------------------------------------------- #
+#  Configuration & DB bootstrap
+# --------------------------------------------------------------------------- #
+logger = logging.getLogger("debug_api")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s")
+
+DB_DIR: pathlib.Path = pathlib.Path("/app/data")          # must match volume mount
+DB_FILE: pathlib.Path = DB_DIR / "horse_bets.sqlite"
 DB_DIR.mkdir(parents=True, exist_ok=True)
 if not DB_FILE.exists():
+    logger.info("DB not found – creating schema at %s", DB_FILE)
     Base.metadata.create_all(ENGINE)
 
-# ─── lifespan: launch head-less scraper in background ───────────────
+# --------------------------------------------------------------------------- #
+#  Lifespan hook – start the global scheduler (main_async) once
+# --------------------------------------------------------------------------- #
 async def lifespan(app: FastAPI):
-    from main import main_async          # root-level main.py
+    from main import main_async   # root-level main.py
     asyncio.create_task(main_async())
-    logging.info("Background scraper started alongside FastAPI")
-    yield                                # nothing to clean on shutdown
+    logger.info("Background scraper started alongside FastAPI")
+    yield  # nothing special to clean up – container stops via SIGTERM
 
-# ─── create the *single* FastAPI instance first ─────────────────────
+# --------------------------------------------------------------------------- #
+#  Create the (single!) FastAPI app before declaring routes
+# --------------------------------------------------------------------------- #
 app = FastAPI(title="Horse-Bets Debug API", lifespan=lifespan)
 
-# ─── helper ----------------------------------------------------------
-def latest_snapshot():
-    conn = sqlite3.connect(DB_FILE)
-    row = conn.execute(
-        "SELECT id, race_id, payload FROM snapshots ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    conn.close()
+
+# --------------------------------------------------------------------------- #
+#  Helpers
+# --------------------------------------------------------------------------- #
+def _conn() -> sqlite3.Connection:          # tiny helper
+    return sqlite3.connect(DB_FILE)
+
+
+def latest_snapshot() -> dict[str, Any] | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT id, race_id, payload FROM snapshots ORDER BY id DESC LIMIT 1"
+        ).fetchone()
     if not row:
         return None
     snap_id, race_id, payload = row
@@ -35,50 +66,71 @@ def latest_snapshot():
     data.update({"snapshot_id": snap_id, "race_id": race_id})
     return data
 
-# ─── routes ----------------------------------------------------------
+
+# --------------------------------------------------------------------------- #
+#  Routes
+# --------------------------------------------------------------------------- #
+@app.get("/health")
+def health():
+    return {"status": "ok", "time": dt.datetime.utcnow().isoformat()}
+
+
 @app.get("/latest")
 def latest():
     data = latest_snapshot()
     return data or {
         "error": "no snapshots yet",
-        "server_time": datetime.datetime.utcnow().isoformat(),
+        "server_time": dt.datetime.utcnow().isoformat(),
     }
+
 
 @app.get("/races")
 def list_races(limit: int | None = 50):
     sql = (
         "SELECT id, race_id, time(post_time) AS local_time "
-        "FROM races WHERE date(post_time)=? ORDER BY post_time "
+        "FROM races "
+        "WHERE date(post_time)=? "
+        "ORDER BY post_time "
     )
     if limit:
         sql += f"LIMIT {limit}"
-    rows = sqlite3.connect(DB_FILE).execute(
-        sql, (datetime.date.today().isoformat(),)
-    ).fetchall()
+    today = dt.date.today().isoformat()
+    with _conn() as conn:
+        rows = conn.execute(sql, (today,)).fetchall()
     return [{"pk": r[0], "race_id": r[1], "post_time": r[2]} for r in rows]
+
 
 @app.post("/collect")
 async def run_collect(bg: BackgroundTasks):
     async def _task():
-        await collect_today(None)
+        try:
+            await collect_today(None)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("collect_today failed: %s", exc)
+
     bg.add_task(_task)
     return {"status": "collect_today queued"}
+
 
 @app.post("/scrape/{race_id}")
 async def run_scrape(race_id: str, bg: BackgroundTasks):
     async def _task():
-        await scrape_race(race_id)
+        try:
+            await scrape_race(race_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("scrape_race(%s) failed: %s", race_id, exc)
+
     bg.add_task(_task)
     return {"status": f"scrape_race({race_id}) queued"}
 
-@app.get("/snapshot/{race_id}")
-def get_snapshot(race_id: str):
-    conn = sqlite3.connect(DB_FILE)
-    row = conn.execute(
-        "SELECT payload FROM snapshots WHERE race_id=? ORDER BY id DESC LIMIT 1",
-        (race_id,)
-    ).fetchone()
-    conn.close()
-    if not row:
-        raise HTTPException(status_code=404, detail="Snapshot not found")
-    return json.loads(row[0])
+
+# ---------- optional one-shot DB upload helper (comment out after use) -------
+"""
+@app.post("/upload_db")
+async def upload_db(file: UploadFile = File(...)):
+    with open(DB_FILE, "wb") as f:
+        f.write(await file.read())
+    logger.warning("Uploaded DB file – %s bytes", f.tell())
+    return {"status": "uploaded", "bytes": f.tell()}
+"""
+# --------------------------------------------------------------------------- #
