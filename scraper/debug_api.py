@@ -12,12 +12,17 @@ import logging
 import pathlib
 import sqlite3
 from typing import Any
-
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from fastapi import Request
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 
 from scraper.daily import collect_today
 from scraper.race_job import scrape_race
 from scraper.storage import ENGINE, Base  # to create tables on first run
+
+
+templates = Jinja2Templates(directory=str(pathlib.Path(__file__).parent / "templates"))
 
 # --------------------------------------------------------------------------- #
 #  Configuration & DB bootstrap
@@ -123,6 +128,32 @@ async def run_scrape(race_id: str, bg: BackgroundTasks):
     bg.add_task(_task)
     return {"status": f"scrape_race({race_id}) queued"}
 
+@app.get("/snapshot/{race_id}")
+def snapshot_for_race(race_id: str):
+    """
+    Return the most-recent snapshot json for the given race_id.
+    404 if we’ve never scraped it.
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT payload, ts "
+            "FROM snapshots "
+            "WHERE race_id = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (race_id,),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="no snapshot for that race")
+
+    payload, ts = row
+    data = json.loads(payload)
+    data.update({"scraped_at": ts, "race_id": race_id})
+    return data
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard(req: Request):
+    return templates.TemplateResponse("index.html", {"request": req})
 
 # ---------- optional one-shot DB upload helper (comment out after use) -------
 """

@@ -1,0 +1,51 @@
+<!-- scraper/templates/index.html -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Horse-Bets dashboard</title>
+<style>
+ body {font-family: sans-serif; margin: 2rem;}
+ table {border-collapse: collapse; width: 100%;}
+ th, td {border: 1px solid #ccc; padding: .4rem .6rem;}
+ tr:hover {background:#f0f0f0; cursor:pointer;}
+ pre {background:#fafafa; padding:1rem; overflow:auto;}
+</style>
+</head>
+<body>
+<h2>Today’s races (<span id="count">0</span>)</h2>
+<table id="tbl">
+  <thead><tr><th>Race ID</th><th>Post&nbsp;time</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2 id="snap-h">Snapshot (click a race)</h2>
+<pre id="snap"></pre>
+
+<script>
+const BASE = "/";
+async function loadRaces(){
+  const res = await fetch(BASE+"races?limit=0");
+  const data = await res.json();
+  document.getElementById("count").textContent = data.length;
+  const tbody = document.querySelector("#tbl tbody");
+  tbody.innerHTML = "";
+  data.forEach(r => {
+    const tr = tbody.insertRow();
+    tr.innerHTML = `<td>${r.race_id}</td><td>${r.post_time}</td>`;
+    tr.onclick = () => loadSnap(r.race_id);
+  });
+}
+async function loadSnap(id){
+  const out = document.getElementById("snap");
+  out.textContent = "Loading…";
+  const res = await fetch(BASE+"snapshot/"+id);
+  out.textContent = res.ok ? JSON.stringify(await res.json(),null,2)
+                           : "No snapshot yet";
+}
+
+loadRaces();
+setInterval(loadRaces, 60_000);        // refresh every minute
+</script>
+</body>
+</html>
