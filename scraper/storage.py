@@ -1,73 +1,73 @@
-"""
-SQLite persistence layer (SQLAlchemy 2.0 style).
-
-• `upsert_race(url, post_time)`   – add or update a race row, returns race_id
-• `store_snapshot(url, payload)`  – JSON blob when we scrape 3 min pre‑off
-"""
+# scraper/storage.py
 from __future__ import annotations
+
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import Column, DateTime, Integer, JSON, String, create_engine
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Integer,
+    JSON,
+    String,
+    create_engine,
+)
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-# ---------- database bootstrap ------------------------------------------------
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-ENGINE = create_engine(f"sqlite:///{DATA_DIR/'horse_bets.sqlite'}", future=True)
-SessionLocal = sessionmaker(bind=ENGINE, expire_on_commit=False)
+# --------------------------------------------------------------------- #
+#  Engine + Base
+# --------------------------------------------------------------------- #
+DB_PATH = Path("/app/data/horse_bets.sqlite")        # matches volume mount
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+ENGINE = create_engine(f"sqlite:///{DB_PATH}", future=True, echo=False)
+SessionLocal = sessionmaker(bind=ENGINE, future=True)
 
 Base = declarative_base()
 
+TZ = ZoneInfo("Europe/Paris")
 
+# --------------------------------------------------------------------- #
+#  Models
+# --------------------------------------------------------------------- #
 class Race(Base):
     __tablename__ = "races"
-    id = Column(Integer, primary_key=True)
-    race_id = Column(String, unique=True, nullable=False)   # renamed
+    id        = Column(Integer, primary_key=True)
+    race_id   = Column(String,  nullable=False, unique=True)
     post_time = Column(DateTime(timezone=True), nullable=False)
 
 
 class Snapshot(Base):
     __tablename__ = "snapshots"
-    id = Column(Integer, primary_key=True)
-    race_id = Column(Integer, nullable=False)
-    scraped_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    payload = Column(JSON, nullable=False)
+    id         = Column(Integer, primary_key=True)
+    race_id    = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True),
+                        default=lambda: datetime.now(tz=TZ),
+                        nullable=False)
+    payload    = Column(JSON, nullable=False)
 
 
-Base.metadata.create_all(ENGINE)  # run migrations later with Alembic
-
-# ---------- CRUD helpers ------------------------------------------------------
-
-
-def _get_session() -> Session:
-    return SessionLocal()
-
-
-def upsert_race(race_id: str, post_time: datetime) -> int:
-    """
-    Insert or update a race row keyed by *race_id*.  Returns primary-key id.
-    """
-    with _get_session() as db:
+# --------------------------------------------------------------------- #
+#  Helpers called by other modules
+# --------------------------------------------------------------------- #
+def upsert_race(race_id: str, post_time: datetime) -> None:
+    with SessionLocal() as db:
         race = db.query(Race).filter_by(race_id=race_id).one_or_none()
         if race:
             race.post_time = post_time
         else:
-            race = Race(race_id=race_id, post_time=post_time)
-            db.add(race)
+            db.add(Race(race_id=race_id, post_time=post_time))
         db.commit()
-        return race.id
 
 
-def store_snapshot(race_id: str, payload: dict[str, Any]) -> None:
-    """
-    Insert a snapshot JSON blob linked to *race_id*.
-    """
-    with _get_session() as db:
-        race = db.query(Race).filter_by(race_id=race_id).one_or_none()
-        if race is None:
-            raise RuntimeError(f"Race {race_id} not found – did collect_today() run?")
-        snap = Snapshot(race_id=race.id, payload=payload)
-        db.add(snap)
+def store_snapshot(race_id: str, payload: dict) -> None:
+    with SessionLocal() as db:
+        db.add(Snapshot(race_id=race_id, payload=payload))
         db.commit()
+
+
+# --------------------------------------------------------------------- #
+#  Create tables on first run
+# --------------------------------------------------------------------- #
+Base.metadata.create_all(ENGINE)
