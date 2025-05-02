@@ -1,5 +1,5 @@
 """
-scraper/debug_api.py  –  lightweight FastAPI debug/ops server
+scraper/debug_api.py – lightweight FastAPI debug/ops server
 Runs alongside the head-less scraper so you can inspect the DB and
 trigger harvests on demand.
 """
@@ -12,25 +12,35 @@ import logging
 import pathlib
 import sqlite3
 from typing import Any
+
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from fastapi import Request
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 
 from scraper.daily import collect_today
 from scraper.race_job import scrape_race
-from scraper.storage import ENGINE, Base  # to create tables on first run
+from scraper.storage import ENGINE, Base  # create tables on first run
 
-
-templates = Jinja2Templates(directory=str(pathlib.Path(__file__).parent / "templates"))
+templates = Jinja2Templates(
+    directory=str(pathlib.Path(__file__).parent / "templates")
+)
 
 # --------------------------------------------------------------------------- #
 #  Configuration & DB bootstrap
 # --------------------------------------------------------------------------- #
 logger = logging.getLogger("debug_api")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s"
+)
 
-DB_DIR: pathlib.Path = pathlib.Path("/app/data")          # must match volume mount
+DB_DIR: pathlib.Path = pathlib.Path("/app/data")  # must match volume mount
 DB_FILE: pathlib.Path = DB_DIR / "horse_bets.sqlite"
 DB_DIR.mkdir(parents=True, exist_ok=True)
 if not DB_FILE.exists():
@@ -41,21 +51,22 @@ if not DB_FILE.exists():
 #  Lifespan hook – start the global scheduler (main_async) once
 # --------------------------------------------------------------------------- #
 async def lifespan(app: FastAPI):
-    from main import main_async   # root-level main.py
+    from main import main_async  # root-level main.py
+
     asyncio.create_task(main_async())
     logger.info("Background scraper started alongside FastAPI")
     yield  # nothing special to clean up – container stops via SIGTERM
 
+
 # --------------------------------------------------------------------------- #
-#  Create the (single!) FastAPI app before declaring routes
+#  Create the FastAPI app before declaring routes
 # --------------------------------------------------------------------------- #
 app = FastAPI(title="Horse-Bets Debug API", lifespan=lifespan)
-
 
 # --------------------------------------------------------------------------- #
 #  Helpers
 # --------------------------------------------------------------------------- #
-def _conn() -> sqlite3.Connection:          # tiny helper
+def _conn() -> sqlite3.Connection:  # tiny helper
     return sqlite3.connect(DB_FILE)
 
 
@@ -128,6 +139,8 @@ async def run_scrape(race_id: str, bg: BackgroundTasks):
     bg.add_task(_task)
     return {"status": f"scrape_race({race_id}) queued"}
 
+
+# ───────────────────────── fixed endpoint ──────────────────────────────────
 @app.get("/snapshot/{race_id}")
 def snapshot_for_race(race_id: str):
     """
@@ -135,8 +148,9 @@ def snapshot_for_race(race_id: str):
     404 if we’ve never scraped it.
     """
     with _conn() as conn:
+        # NOTE: timestamp column is 'created_at', not 'ts'
         row = conn.execute(
-            "SELECT payload, ts "
+            "SELECT payload, created_at "
             "FROM snapshots "
             "WHERE race_id = ? "
             "ORDER BY id DESC LIMIT 1",
@@ -146,16 +160,29 @@ def snapshot_for_race(race_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="no snapshot for that race")
 
-    payload, ts = row
-    data = json.loads(payload)
-    data.update({"scraped_at": ts, "race_id": race_id})
+    payload, created_at = row
+
+    # robust decode – payload might be TEXT or bytes
+    try:
+        if isinstance(payload, (bytes, bytearray)):
+            payload = payload.decode()
+        data = json.loads(payload)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Corrupt payload for %s: %s", race_id, exc)
+        raise HTTPException(
+            status_code=500, detail="snapshot payload could not be decoded"
+        ) from exc
+
+    data.update({"scraped_at": created_at, "race_id": race_id})
     return data
+
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(req: Request):
     return templates.TemplateResponse("index.html", {"request": req})
 
-# ---------- optional one-shot DB upload helper (comment out after use) -------
+
+# ---------- optional one-shot DB upload helper (comment out after use) ------
 """
 @app.post("/upload_db")
 async def upload_db(file: UploadFile = File(...)):
